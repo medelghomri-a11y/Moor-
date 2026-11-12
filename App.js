@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -11,6 +11,7 @@ import {
   Alert,
   Vibration,
 } from 'react-native';
+import { Audio } from 'expo-av';
 
 const REGIONS = [
   {
@@ -68,9 +69,9 @@ const REGIONS = [
         answer: 0,
       },
       {
-        q: 'ما اسم القصبة التاريخية الشهيرة قرب مدينة طانطان؟',
-        options: ['قصبة الأوداية', 'قصبة تلوات', 'قصبة آيت بن حدو', 'موسم طانطان التراثي'],
-        answer: 3,
+        q: 'ما اسم الموسم التراثي العالمي الشهير المصنف ضمن تراث اليونسكو بهذه الجهة؟',
+        options: ['موسم طانطان التراثي', 'موسم مولاي عبد الله', 'موسم حب الملوك', 'موسم الورود'],
+        answer: 0,
       },
       {
         q: 'ما اسم الإقليم الجبلي بالجهة المعروف بنقوشه الصخرية المورية القديمة؟',
@@ -279,22 +280,90 @@ const REGIONS = [
   },
 ];
 
+// روابط صوتية هادئة ومؤثرات مدمجة
+const SOUNDS = {
+  bgm: 'https://cdn.pixabay.com/download/audio/2022/11/22/audio_febc508520.mp3', // موسيقى شرقية/أندلسية هادئة
+  correct: 'https://cdn.pixabay.com/download/audio/2021/08/04/audio_0625c1539c.mp3', // رنين عملات ذهبية
+  wrong: 'https://cdn.pixabay.com/download/audio/2022/03/10/audio_c8c8a73467.mp3', // تنبيه خطأ
+  victory: 'https://cdn.pixabay.com/download/audio/2021/08/04/audio_12b0c7443c.mp3', // نغمة فتح الكنز
+};
+
 export default function App() {
-  const [screen, setScreen] = useState('home'); // home | map | quiz | victory | gameover
+  const [screen, setScreen] = useState('home');
   const [unlockedRegion, setUnlockedRegion] = useState(1);
   const [currentRegion, setCurrentRegion] = useState(null);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [hearts, setHearts] = useState(2);
   const [score, setScore] = useState(0);
   const [hiddenOptions, setHiddenOptions] = useState([]);
+  const [soundEnabled, setSoundEnabled] = useState(true);
   const [usedLifelines, setUsedLifelines] = useState({
     nafzaouia: false,
     tachfine: false,
     mansour: false,
   });
 
+  const bgmRef = useRef(null);
+
+  useEffect(() => {
+    setupAudio();
+    return () => {
+      if (bgmRef.current) {
+        bgmRef.current.unloadAsync();
+      }
+    };
+  }, []);
+
+  const setupAudio = async () => {
+    try {
+      await Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+      });
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: SOUNDS.bgm },
+        { isLooping: true, volume: 0.35 }
+      );
+      bgmRef.current = sound;
+      await sound.playAsync();
+    } catch (e) {
+      // في حالة عدم توفر اتصال إنترنت تستمر اللعبة بسلاسة دون توقف
+    }
+  };
+
+  const toggleSound = async () => {
+    const nextState = !soundEnabled;
+    setSoundEnabled(nextState);
+    try {
+      if (bgmRef.current) {
+        if (nextState) {
+          await bgmRef.current.playAsync();
+        } else {
+          await bgmRef.current.pauseAsync();
+        }
+      }
+    } catch (e) {}
+  };
+
+  const playSfx = async (type) => {
+    if (!soundEnabled) return;
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: SOUNDS[type] },
+        { shouldPlay: true, volume: 0.8 }
+      );
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.didJustFinish) {
+          sound.unloadAsync();
+        }
+      });
+    } catch (e) {}
+  };
+
   const startRegion = (region) => {
     if (region.id > unlockedRegion) {
+      playSfx('wrong');
       Alert.alert('جهة مغلقة 🔒', 'أكمل الجهات الجنوبية أولاً لفتح هذا المسار!');
       return;
     }
@@ -308,12 +377,218 @@ export default function App() {
   const handleAnswer = (selectedIndex) => {
     const currentQ = currentRegion.questions[questionIndex];
     if (selectedIndex === currentQ.answer) {
+      playSfx('correct');
       setScore(score + 100);
       setHiddenOptions([]);
       if (questionIndex + 1 < currentRegion.questions.length) {
         setQuestionIndex(questionIndex + 1);
       } else {
+        playSfx('victory');
         if (currentRegion.id === unlockedRegion && unlockedRegion < 12) {
+          setUnlockedRegion(unlockedRegion + 1);
+        }
+        setScreen('victory');
+      }
+    } else {
+      playSfx('wrong');
+      Vibration.vibrate(200);
+      const remaining = hearts - 1;
+      setHearts(remaining);
+      if (remaining <= 0) {
+        setScreen('gameover');
+      } else {
+        Alert.alert('إجابة خاطئة! 💔', 'بقي لك قلب واحد، ركز جيداً يا بطل المغرب!');
+      }
+    }
+  };
+
+  const useNafzaouia = () => {
+    if (usedLifelines.nafzaouia) return;
+    playSfx('correct');
+    const currentQ = currentRegion.questions[questionIndex];
+    const wrongIndices = [0, 1, 2, 3].filter((i) => i !== currentQ.answer);
+    setHiddenOptions([wrongIndices[0], wrongIndices[1]]);
+    setUsedLifelines({ ...usedLifelines, nafzaouia: true });
+  };
+
+  const useTachfine = () => {
+    if (usedLifelines.tachfine) return;
+    playSfx('correct');
+    setUsedLifelines({ ...usedLifelines, tachfine: true });
+    Alert.alert('🐎 مسار ابن تاشفين', 'تم تجاوز هذا السؤال بنجاح ومواصلة الزحف!');
+    setHiddenOptions([]);
+    if (questionIndex + 1 < currentRegion.questions.length) {
+      setQuestionIndex(questionIndex + 1);
+    } else {
+      playSfx('victory');
+      if (currentRegion.id === unlockedRegion && unlockedRegion < 12) {
+        setUnlockedRegion(unlockedRegion + 1);
+      }
+      setScreen('victory');
+    }
+  };
+
+  const useMansour = () => {
+    if (usedLifelines.mansour) return;
+    playSfx('victory');
+    setHearts(hearts + 1);
+    setScore(score + 200);
+    setUsedLifelines({ ...usedLifelines, mansour: true });
+    Alert.alert('👑 سلطان الذهب أحمد المنصور', 'تم منحك قلباً إضافياً + 200 قطعة ذهبية!');
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#070b14" />
+
+      {screen === 'home' && (
+        <View style={styles.centerBox}>
+          <TouchableOpacity style={styles.floatingSoundBtn} onPress={toggleSound}>
+            <Text style={styles.soundIcon}>{soundEnabled ? '🔊' : '🔇'}</Text>
+          </TouchableOpacity>
+          <Image source={require('./1794491844204.jpg')} style={styles.logo} />
+          <Text style={styles.title}>الكنز الموري</Text>
+          <Text style={styles.tifinaghTitle}>ⴰⴳⵍⴰ ⴰⵎⵓⵔⵉ</Text>
+          <Text style={styles.subtitle}>
+            رحلة سيادية عبر 33 قرناً من التاريخ والحضارة المغربية من الصحراء إلى البوغاز
+          </Text>
+          <TouchableOpacity style={styles.goldButton} onPress={() => setScreen('map')}>
+            <Text style={styles.goldButtonText}>ابدأ الرحلة • ⴱⴷⵓ</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {screen === 'map' && (
+        <View style={styles.fullBox}>
+          <View style={styles.header}>
+            <TouchableOpacity onPress={toggleSound} style={styles.soundBtnSmall}>
+              <Text style={styles.soundIcon}>{soundEnabled ? '🔊' : '🔇'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>خريطة الجهات الـ 12</Text>
+            <Text style={styles.goldBadge}>🪙 {score}</Text>
+          </View>
+          <ScrollView contentContainerStyle={styles.mapList}>
+            {REGIONS.map((region) => {
+              const isUnlocked = region.id <= unlockedRegion;
+              const isCompleted = region.id < unlockedRegion;
+              return (
+                <TouchableOpacity
+                  key={region.id}
+                  style={[
+                    styles.regionCard,
+                    !isUnlocked && styles.lockedCard,
+                    isCompleted && styles.completedCard,
+                  ]}
+                  onPress={() => startRegion(region)}
+                >
+                  <View>
+                    <Text style={styles.regionName}>
+                      {region.id}. {region.name}
+                    </Text>
+                    <Text style={styles.regionTifinagh}>{region.tifinagh}</Text>
+                  </View>
+                  <Text style={styles.statusIcon}>
+                    {isCompleted ? '👑' : isUnlocked ? '⚔️' : '🔒'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
+      {screen === 'quiz' && currentRegion && (
+        <View style={styles.fullBox}>
+          <View style={styles.header}>
+            <TouchableOpacity onPress={() => setScreen('map')}>
+              <Text style={styles.backText}>← الخريطة</Text>
+            </TouchableOpacity>
+            <Text style={styles.heartsText}>{'❤️'.repeat(hearts)}</Text>
+            <TouchableOpacity onPress={toggleSound} style={styles.soundBtnSmall}>
+              <Text style={styles.soundIcon}>{soundEnabled ? '🔊' : '🔇'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.goldBadge}>🪙 {score}</Text>
+          </View>
+
+          <View style={styles.quizBox}>
+            <Text style={styles.regionBadge}>{currentRegion.name}</Text>
+            <Text style={styles.progressText}>
+              السؤال {questionIndex + 1} من {currentRegion.questions.length}
+            </Text>
+
+            <View style={styles.questionCard}>
+              <Text style={styles.questionText}>
+                {currentRegion.questions[questionIndex].q}
+              </Text>
+            </View>
+
+            {currentRegion.questions[questionIndex].options.map((opt, idx) => {
+              if (hiddenOptions.includes(idx)) return null;
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  style={styles.optionButton}
+                  onPress={() => handleAnswer(idx)}
+                >
+                  <Text style={styles.optionText}>{opt}</Text>
+                </TouchableOpacity>
+              );
+            })}
+
+            <View style={styles.lifelinesRow}>
+              <TouchableOpacity
+                style={[styles.lifelineBtn, usedLifelines.nafzaouia && styles.usedBtn]}
+                onPress={useNafzaouia}
+              >
+                <Text style={styles.lifelineIcon}>🧕</Text>
+                <Text style={styles.lifelineLabel}>النفزاوية</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.lifelineBtn, usedLifelines.tachfine && styles.usedBtn]}
+                onPress={useTachfine}
+              >
+                <Text style={styles.lifelineIcon}>🐎</Text>
+                <Text style={styles.lifelineLabel}>ابن تاشفين</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.lifelineBtn, usedLifelines.mansour && styles.usedBtn]}
+                onPress={useMansour}
+              >
+                <Text style={styles.lifelineIcon}>👑</Text>
+                <Text style={styles.lifelineLabel}>المنصور</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {screen === 'victory' && (
+        <View style={styles.centerBox}>
+          <Text style={styles.bigEmoji}>👑</Text>
+          <Text style={styles.title}>تم فتح الكنز الجهوي!</Text>
+          <Text style={styles.subtitle}>
+            أحسنت يا حامي الذاكرة المورية! أتممت جهة {currentRegion?.name} بنجاح.
+          </Text>
+          <TouchableOpacity style={styles.goldButton} onPress={() => setScreen('map')}>
+            <Text style={styles.goldButtonText}>مواصلة المسار • ⵎⵓⵏ</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {screen === 'gameover' && (
+        <View style={styles.centerBox}>
+          <Text style={styles.bigEmoji}>🛡️</Text>
+          <Text style={styles.title}>استراحة محارب</Text>
+          <Text style={styles.subtitle}>
+            نفدت قلوبك في هذه الجولة، لكن العزيمة المغربية لا تنكسر. أعد المحاولة!
+          </Text>
+          <TouchableOpacity style={styles.goldButton} onPress={() => setScreen('map')}>
+            <Text style={styles.goldButtonText}>العودة للخريطة</Text>
+          </TouchableOpacity>
+        </View>
+    f (currentRegion.id === unlockedRegion && unlockedRegion < 12) {
           setUnlockedRegion(unlockedRegion + 1);
         }
         setScreen('victory');
