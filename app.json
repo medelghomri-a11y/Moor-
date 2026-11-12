@@ -18,6 +18,15 @@
         "foregroundImage": "./1794491844204.jpg",
         "backgroundColor": "#070b14"
       }
+    },
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "acb48be7-af3c-4776-b09b-134e2d44a24"
+      }
     }
   }
 }
